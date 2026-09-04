@@ -7,7 +7,7 @@ import { formatSingaporeDateTime, getSingaporeNow } from '@/lib/timezone';
 export const runtime = 'nodejs';
 
 const importTodoSchema = z.object({
-  title: z.string().min(1),
+  title: z.string().trim().min(1),
   completed: z.boolean(),
   due_date: z.string().nullable(),
   priority: z.enum(['high', 'medium', 'low']),
@@ -27,7 +27,7 @@ const importTodoSchema = z.object({
   updated_at: z.string().nullable(),
   subtasks: z.array(
     z.object({
-      title: z.string().min(1),
+      title: z.string().trim().min(1),
       completed: z.boolean(),
       position: z.number().int(),
       created_at: z.string(),
@@ -35,13 +35,15 @@ const importTodoSchema = z.object({
   ),
   tags: z.array(
     z.object({
-      name: z.string().min(1),
+      name: z.string().trim().min(1),
       color: z.string().min(1),
     }),
   ),
-}).refine((todo) => todo.reminder_minutes === null || todo.due_date !== null, {
-  message: 'Reminders require a due date',
-});
+})
+  .refine((todo) => todo.reminder_minutes === null || todo.due_date !== null, { message: 'Reminders require a due date' })
+  .refine((todo) => !todo.is_recurring || (todo.due_date !== null && todo.recurrence_pattern !== null), {
+    message: 'Recurring todos require a due date and recurrence pattern',
+  });
 
 const importSchema = z.object({
   version: z.literal(1),
@@ -56,7 +58,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const payload = importSchema.parse(await request.json());
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON format' }, { status: 400 });
+    }
+    const payload = importSchema.parse(body);
     const importTransaction = db.transaction(() => {
       for (const todo of payload.todos) {
         const result = db
@@ -79,12 +87,12 @@ export async function POST(request: NextRequest) {
           );
         const todoId = Number(result.lastInsertRowid);
 
-        for (const subtask of todo.subtasks) {
+        for (const [position, subtask] of todo.subtasks.entries()) {
           db.prepare('INSERT INTO subtasks (todo_id, title, completed, position, created_at) VALUES (?, ?, ?, ?, ?)').run(
             todoId,
             subtask.title,
             subtask.completed ? 1 : 0,
-            subtask.position,
+            position,
             subtask.created_at,
           );
         }
@@ -104,7 +112,7 @@ export async function POST(request: NextRequest) {
 
     importTransaction();
     return NextResponse.json({ imported: payload.todos.length });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to import todos' }, { status: 400 });
+  } catch {
+    return NextResponse.json({ error: 'Failed to import todos. Please check the file format.' }, { status: 400 });
   }
 }

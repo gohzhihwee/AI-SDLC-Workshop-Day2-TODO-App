@@ -150,7 +150,7 @@ export interface CreateTemplateInput {
   subtasks_json?: string | null;
 }
 
-export interface ExportTodo extends Omit<Todo, 'id' | 'user_id' | 'subtasks' | 'tags'> {
+export interface ExportTodo extends Omit<Todo, 'user_id' | 'subtasks' | 'tags'> {
   subtasks: Array<Omit<Subtask, 'id' | 'todo_id'>>;
   tags: Array<Pick<Tag, 'name' | 'color'>>;
 }
@@ -706,6 +706,7 @@ export const todoDB = {
   },
   exportByUserId(userId: number): ExportTodo[] {
     return this.listByUserId(userId).map((todo) => ({
+      id: todo.id,
       title: todo.title,
       completed: todo.completed,
       due_date: todo.due_date,

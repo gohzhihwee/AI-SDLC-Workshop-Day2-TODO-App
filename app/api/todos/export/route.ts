@@ -29,7 +29,10 @@ export async function GET(request: NextRequest) {
         {
           version: 1,
           exported_at: formatSingaporeDateTime(getSingaporeNow()),
-          todos,
+          todos: todos.map(({ id, ...todo }) => {
+            void id;
+            return todo;
+          }),
         },
         null,
         2,
@@ -45,9 +48,9 @@ export async function GET(request: NextRequest) {
 
   const lines = [
     'ID,Title,Completed,Due Date,Priority,Recurring,Pattern,Reminder',
-    ...todos.map((todo, index) =>
+    ...todos.map((todo) =>
       [
-        index + 1,
+        todo.id,
         escapeCsv(todo.title),
         todo.completed,
         escapeCsv(todo.due_date),
@@ -59,7 +62,7 @@ export async function GET(request: NextRequest) {
     ),
   ];
 
-  return new NextResponse(lines.join('\n'), {
+  return new NextResponse(`${lines.join('\r\n')}\r\n`, {
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="todos-${filenameDate}.csv"`,

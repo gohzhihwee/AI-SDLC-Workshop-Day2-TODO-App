@@ -579,13 +579,13 @@ export default function HomePage() {
 
     try {
       const text = await file.text();
-      await requestJson('/api/todos/import', {
+      const data = await requestJson<{ imported: number }>('/api/todos/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: text,
       });
       await loadApp();
-      setBanner('Todos imported');
+      setBanner(`Successfully imported ${data.imported} todos`);
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : 'Unable to import todos');
     } finally {
