@@ -15,7 +15,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Username is required' }, { status: 400 });
     }
 
-    const user = userDB.getOrCreate(trimmed);
+    const existingUser = userDB.getByUsername(trimmed);
+    if (existingUser && authenticatorDB.listByUserId(existingUser.id).length > 0) {
+      return NextResponse.json({ error: 'User already exists' }, { status: 409 });
+    }
+
+    const user = existingUser ?? userDB.create(trimmed);
     const authenticators = authenticatorDB.listByUserId(user.id);
     const { rpID } = getRelyingPartyOrigin(request);
     const options = await generateRegistrationOptions({

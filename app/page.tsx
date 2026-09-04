@@ -1227,15 +1227,15 @@ export default function HomePage() {
 
           <div className="space-y-6">
             <section data-testid="overdue-section" className="rounded-3xl bg-white p-6 shadow-sm dark:bg-slate-900">
-              <h2 className="mb-4 text-xl font-semibold">Overdue</h2>
+              <h2 className="mb-4 text-xl font-semibold text-red-600 dark:text-red-400">Overdue ({overdueTodos.length})</h2>
               <div className="space-y-4">{overdueTodos.length ? overdueTodos.map(renderTodoCard) : <p className="text-sm text-slate-500 dark:text-slate-400">No overdue todos.</p>}</div>
             </section>
             <section data-testid="pending-section" className="rounded-3xl bg-white p-6 shadow-sm dark:bg-slate-900">
-              <h2 className="mb-4 text-xl font-semibold">Pending</h2>
+              <h2 className="mb-4 text-xl font-semibold">Pending ({pendingTodos.length})</h2>
               <div className="space-y-4">{pendingTodos.length ? pendingTodos.map(renderTodoCard) : <p className="text-sm text-slate-500 dark:text-slate-400">No pending todos.</p>}</div>
             </section>
             <section data-testid="completed-section" className="rounded-3xl bg-white p-6 shadow-sm dark:bg-slate-900">
-              <h2 className="mb-4 text-xl font-semibold">Completed</h2>
+              <h2 className="mb-4 text-xl font-semibold">Completed ({completedTodos.length})</h2>
               <div className="space-y-4">{completedTodos.length ? completedTodos.map(renderTodoCard) : <p className="text-sm text-slate-500 dark:text-slate-400">No completed todos.</p>}</div>
             </section>
           </div>

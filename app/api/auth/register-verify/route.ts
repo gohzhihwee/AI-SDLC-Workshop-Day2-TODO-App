@@ -37,6 +37,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
+    if (authenticatorDB.listByUserId(user.id).length > 0) {
+      return NextResponse.json({ error: 'User already exists' }, { status: 409 });
+    }
+
     const { credential } = verification.registrationInfo;
     const credentialId = credential.id;
     if (!authenticatorDB.getByCredentialId(credentialId)) {

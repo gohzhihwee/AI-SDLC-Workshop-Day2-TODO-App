@@ -1,3 +1,4 @@
+import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 
 export type WebAuthnState = {
@@ -10,13 +11,41 @@ export type WebAuthnState = {
 const registerCookieName = 'todo-app-register-state';
 const loginCookieName = 'todo-app-login-state';
 
-function encode(value: WebAuthnState): string {
-  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+function getWebAuthnStateSecret(): Uint8Array {
+  const webAuthnSecret = process.env.JWT_SECRET;
+  if (!webAuthnSecret && process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET is required in production');
+  }
+
+  return new TextEncoder().encode(webAuthnSecret ?? 'todo-app-dev-secret');
 }
 
-function decode(value: string): WebAuthnState | null {
+async function encode(value: WebAuthnState): Promise<string> {
+  return new SignJWT({ ...value })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(value.expiresAt / 1000))
+    .sign(getWebAuthnStateSecret());
+}
+
+async function decode(value: string): Promise<WebAuthnState | null> {
   try {
-    return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as WebAuthnState;
+    const { payload } = await jwtVerify(value, getWebAuthnStateSecret());
+    if (
+      typeof payload.challenge !== 'string' ||
+      typeof payload.username !== 'string' ||
+      typeof payload.expiresAt !== 'number' ||
+      (payload.userId !== undefined && typeof payload.userId !== 'number')
+    ) {
+      return null;
+    }
+
+    return {
+      challenge: payload.challenge,
+      userId: payload.userId,
+      username: payload.username,
+      expiresAt: payload.expiresAt,
+    };
   } catch {
     return null;
   }
@@ -24,7 +53,7 @@ function decode(value: string): WebAuthnState | null {
 
 async function setState(cookieName: string, value: WebAuthnState) {
   const cookieStore = await cookies();
-  cookieStore.set(cookieName, encode(value), {
+  cookieStore.set(cookieName, await encode(value), {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
@@ -40,7 +69,7 @@ async function getState(cookieName: string): Promise<WebAuthnState | null> {
     return null;
   }
 
-  const decoded = decode(value);
+  const decoded = await decode(value);
   if (!decoded || decoded.expiresAt < Date.now()) {
     return null;
   }

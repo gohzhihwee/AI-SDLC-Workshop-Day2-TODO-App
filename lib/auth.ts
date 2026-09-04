@@ -8,19 +8,26 @@ export interface SessionPayload extends Session, JWTPayload {}
 
 export const SESSION_COOKIE_NAME = 'todo-app-session';
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET ?? 'todo-app-dev-secret');
+function getJwtSecret(): Uint8Array {
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret && process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET is required in production');
+  }
+
+  return new TextEncoder().encode(jwtSecret ?? 'todo-app-dev-secret');
+}
 
 export async function signSessionToken(session: Session): Promise<string> {
   return new SignJWT(session as SessionPayload)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('7d')
-    .sign(secret);
+    .sign(getJwtSecret());
 }
 
 export async function verifySessionToken(token: string): Promise<Session | null> {
   try {
-    const { payload } = await jwtVerify(token, secret);
+    const { payload } = await jwtVerify(token, getJwtSecret());
     const userId = payload.userId;
     const username = payload.username;
 

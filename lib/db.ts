@@ -6,6 +6,31 @@ export type Priority = 'high' | 'medium' | 'low';
 export type RecurrencePattern = 'daily' | 'weekly' | 'monthly' | 'yearly';
 export type ReminderMinutes = 15 | 30 | 60 | 120 | 1440 | 2880 | 10080;
 
+export const PRIORITY_VALUES: Priority[] = ['high', 'medium', 'low'];
+
+export const PRIORITY_ORDER: Record<Priority, number> = {
+  high: 0,
+  medium: 1,
+  low: 2,
+};
+
+/**
+ * Validates a priority value per the priority-system contract:
+ * omitted/undefined/null defaults to 'medium'; anything else must be an exact
+ * lowercase match of 'high' | 'medium' | 'low' or it throws.
+ */
+export function validatePriority(value: unknown): Priority {
+  if (value === undefined || value === null) {
+    return 'medium';
+  }
+
+  if (value === 'high' || value === 'medium' || value === 'low') {
+    return value;
+  }
+
+  throw new Error(`Invalid priority: ${String(value)}. Must be 'high', 'medium', or 'low'.`);
+}
+
 export interface User {
   id: number;
   username: string;
@@ -216,7 +241,6 @@ type TodoRow = Omit<Todo, 'completed' | 'is_recurring' | 'subtasks' | 'tags'> & 
 
 type SubtaskRow = Omit<Subtask, 'completed'> & { completed: number };
 
-const validPriorities: Priority[] = ['high', 'medium', 'low'];
 const validPatterns: RecurrencePattern[] = ['daily', 'weekly', 'monthly', 'yearly'];
 const validReminders: ReminderMinutes[] = [15, 30, 60, 120, 1440, 2880, 10080];
 
@@ -239,16 +263,30 @@ function placeholders(ids: number[]): string {
   return ids.map(() => '?').join(', ');
 }
 
+function assertTagsBelongToUser(userId: number, tagIds: number[]): void {
+  if (tagIds.length === 0) {
+    return;
+  }
+
+  const uniqueTagIds = [...new Set(tagIds)];
+  const ownedCount = (
+    db.prepare(`SELECT COUNT(*) AS count FROM tags WHERE user_id = ? AND id IN (${placeholders(uniqueTagIds)})`).get(userId, ...uniqueTagIds) as {
+      count: number;
+    }
+  ).count;
+
+  if (ownedCount !== uniqueTagIds.length) {
+    throw new Error('Invalid tag');
+  }
+}
+
 function normalizeTodoInput(input: CreateTodoInput | UpdateTodoInput, enforceFutureDueDate = true) {
   const title = input.title.trim();
   if (!title) {
     throw new Error('Title is required');
   }
 
-  const priority = input.priority ?? 'medium';
-  if (!validPriorities.includes(priority)) {
-    throw new Error('Invalid priority');
-  }
+  const priority = validatePriority(input.priority);
 
   const isRecurring = Boolean(input.is_recurring);
   const recurrencePattern = input.recurrence_pattern ?? null;
@@ -266,10 +304,17 @@ function normalizeTodoInput(input: CreateTodoInput | UpdateTodoInput, enforceFut
   }
 
   const dueDate = input.due_date ?? null;
-  if (dueDate && enforceFutureDueDate) {
-    const minimum = addSingaporeMinutes(getSingaporeNow(), 1);
-    if (parseSingaporeDate(dueDate).getTime() < minimum.getTime()) {
-      throw new Error('Due date must be at least 1 minute in the future');
+  if (dueDate) {
+    const parsedDueDate = parseSingaporeDate(dueDate);
+    if (Number.isNaN(parsedDueDate.getTime())) {
+      throw new Error('Due date is invalid');
+    }
+
+    if (enforceFutureDueDate) {
+      const minimum = addSingaporeMinutes(getSingaporeNow(), 1);
+      if (parsedDueDate.getTime() < minimum.getTime()) {
+        throw new Error('Due date must be at least 1 minute in the future');
+      }
     }
   }
 
@@ -385,6 +430,9 @@ export const todoDB = {
   },
   create(userId: number, input: CreateTodoInput): Todo {
     const normalized = normalizeTodoInput(input);
+    const tagIds = input.tagIds ?? [];
+    assertTagsBelongToUser(userId, tagIds);
+
     const create = db.transaction(() => {
       const result = db
         .prepare(
@@ -406,7 +454,7 @@ export const todoDB = {
         );
 
       const todoId = Number(result.lastInsertRowid);
-      for (const tagId of input.tagIds ?? []) {
+      for (const tagId of tagIds) {
         db.prepare('INSERT OR IGNORE INTO todo_tags (todo_id, tag_id) VALUES (?, ?)').run(todoId, tagId);
       }
 
@@ -419,6 +467,10 @@ export const todoDB = {
     const existing = this.getById(userId, id);
     if (!existing) {
       return null;
+    }
+
+    if (input.priority === null) {
+      throw new Error("Invalid priority: null. Must be 'high', 'medium', or 'low'.");
     }
 
     const nextDueDate = input.due_date === undefined ? existing.due_date : input.due_date;
@@ -457,6 +509,8 @@ export const todoDB = {
     );
 
     if (input.tagIds) {
+      assertTagsBelongToUser(userId, input.tagIds);
+
       db.transaction(() => {
         db.prepare('DELETE FROM todo_tags WHERE todo_id = ?').run(id);
         for (const tagId of input.tagIds ?? []) {
@@ -706,10 +760,7 @@ export const templateDB = {
       throw new Error('Template name and title are required');
     }
 
-    const priority = input.priority ?? 'medium';
-    if (!validPriorities.includes(priority)) {
-      throw new Error('Invalid priority');
-    }
+    const priority = validatePriority(input.priority);
 
     if (input.recurrence_pattern && !validPatterns.includes(input.recurrence_pattern)) {
       throw new Error('Invalid recurrence pattern');

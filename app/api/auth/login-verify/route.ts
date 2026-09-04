@@ -26,6 +26,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Authenticator not found' }, { status: 404 });
     }
 
+    if (authenticator.user_id !== state.userId) {
+      return NextResponse.json({ error: 'Authenticator/user mismatch' }, { status: 400 });
+    }
+
     const { origin, rpID } = getRelyingPartyOrigin(request);
     const verification = await verifyAuthenticationResponse({
       response: body.response as Parameters<typeof verifyAuthenticationResponse>[0]['response'],
