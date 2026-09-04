@@ -1,10 +1,9 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 import type { JWTPayload } from 'jose';
-import type { Session } from '@/lib/db';
+import type { Session, User } from '@/lib/db';
 
 export interface SessionPayload extends Session, JWTPayload {}
-
 
 export const SESSION_COOKIE_NAME = 'todo-app-session';
 
@@ -28,20 +27,17 @@ export async function signSessionToken(session: Session): Promise<string> {
 export async function verifySessionToken(token: string): Promise<Session | null> {
   try {
     const { payload } = await jwtVerify(token, getJwtSecret());
-    const userId = payload.userId;
-    const username = payload.username;
-
-    if (typeof userId !== 'number' || typeof username !== 'string') {
+    if (typeof payload.userId !== 'number' || typeof payload.username !== 'string') {
       return null;
     }
-
-    return { userId, username };
+    return { userId: payload.userId, username: payload.username };
   } catch {
     return null;
   }
 }
 
-export async function createSession(session: Session): Promise<void> {
+export async function createSession(user: User | Session): Promise<void> {
+  const session = 'id' in user ? { userId: user.id, username: user.username } : user;
   const token = await signSessionToken(session);
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, {
@@ -56,11 +52,7 @@ export async function createSession(session: Session): Promise<void> {
 export async function getSession(): Promise<Session | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  if (!token) {
-    return null;
-  }
-
-  return verifySessionToken(token);
+  return token ? verifySessionToken(token) : null;
 }
 
 export async function deleteSession(): Promise<void> {

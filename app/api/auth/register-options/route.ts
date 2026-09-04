@@ -20,14 +20,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User already exists' }, { status: 409 });
     }
 
-    const user = existingUser ?? userDB.create(trimmed);
-    const authenticators = authenticatorDB.listByUserId(user.id);
+    const authenticators = existingUser ? authenticatorDB.listByUserId(existingUser.id) : [];
     const { rpID } = getRelyingPartyOrigin(request);
     const options = await generateRegistrationOptions({
-      rpName: 'Todo App',
+      rpName: process.env.RP_NAME ?? 'Todo App',
       rpID,
-      userName: user.username,
-      userID: isoUint8Array.fromUTF8String(String(user.id)),
+      userName: trimmed,
+      userID: isoUint8Array.fromUTF8String(String(existingUser?.id ?? crypto.randomUUID())),
       excludeCredentials: authenticators.map((authenticator) => ({
         id: authenticator.credential_id,
         type: 'public-key' as const,
@@ -40,13 +39,14 @@ export async function POST(request: NextRequest) {
 
     await setRegisterState({
       challenge: options.challenge,
-      userId: user.id,
-      username: user.username,
+      userId: existingUser?.id,
+      username: trimmed,
       expiresAt: Date.now() + 10 * 60 * 1000,
     });
 
     return NextResponse.json(options);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to create options' }, { status: 400 });
+    console.error('Unable to create registration options', error);
+    return NextResponse.json({ error: 'Unable to create registration options' }, { status: 500 });
   }
 }

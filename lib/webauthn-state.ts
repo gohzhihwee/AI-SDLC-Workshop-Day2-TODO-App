@@ -1,5 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
+import { webauthnChallengeDB } from '@/lib/db';
 
 export type WebAuthnState = {
   challenge: string;
@@ -51,7 +52,8 @@ async function decode(value: string): Promise<WebAuthnState | null> {
   }
 }
 
-async function setState(cookieName: string, value: WebAuthnState) {
+async function setState(cookieName: string, kind: 'register' | 'login', value: WebAuthnState) {
+  webauthnChallengeDB.create(value.challenge, kind, value.userId, value.username, value.expiresAt);
   const cookieStore = await cookies();
   cookieStore.set(cookieName, await encode(value), {
     httpOnly: true,
@@ -88,8 +90,17 @@ async function clearState(cookieName: string) {
   });
 }
 
+async function consumeState(cookieName: string, kind: 'register' | 'login'): Promise<WebAuthnState | null> {
+  const state = await getState(cookieName);
+  if (!state || !webauthnChallengeDB.consume(state.challenge, kind)) {
+    return null;
+  }
+  await clearState(cookieName);
+  return state;
+}
+
 export function setRegisterState(value: WebAuthnState) {
-  return setState(registerCookieName, value);
+  return setState(registerCookieName, 'register', value);
 }
 
 export function getRegisterState() {
@@ -100,8 +111,12 @@ export function clearRegisterState() {
   return clearState(registerCookieName);
 }
 
+export function consumeRegisterState() {
+  return consumeState(registerCookieName, 'register');
+}
+
 export function setLoginState(value: WebAuthnState) {
-  return setState(loginCookieName, value);
+  return setState(loginCookieName, 'login', value);
 }
 
 export function getLoginState() {
@@ -110,4 +125,8 @@ export function getLoginState() {
 
 export function clearLoginState() {
   return clearState(loginCookieName);
+}
+
+export function consumeLoginState() {
+  return consumeState(loginCookieName, 'login');
 }

@@ -2,14 +2,14 @@ import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { createSession } from '@/lib/auth';
 import { authenticatorDB, userDB } from '@/lib/db';
-import { clearLoginState, getLoginState } from '@/lib/webauthn-state';
+import { consumeLoginState } from '@/lib/webauthn-state';
 import { getRelyingPartyOrigin } from '@/lib/webauthn-rp';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    const state = await getLoginState();
+    const state = await consumeLoginState();
     if (!state || !state.userId) {
       return NextResponse.json({ error: 'Login session expired' }, { status: 400 });
     }
@@ -53,17 +53,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Authenticator counter did not advance' }, { status: 400 });
     }
 
-    authenticatorDB.updateCounter(authenticator.id, nextCounter);
+    if (!authenticatorDB.updateCounterIfAdvances(authenticator.id, currentCounter, nextCounter)) {
+      return NextResponse.json({ error: 'Authenticator counter did not advance' }, { status: 400 });
+    }
     const user = userDB.getById(state.userId);
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
     await createSession({ userId: user.id, username: user.username });
-    await clearLoginState();
-
     return NextResponse.json({ verified: true, user: { id: user.id, username: user.username } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Login verification failed' }, { status: 400 });
+    console.error('Login verification failed', error);
+    return NextResponse.json({ error: 'Login verification failed' }, { status: 400 });
   }
 }

@@ -2,14 +2,14 @@ import { verifyRegistrationResponse } from '@simplewebauthn/server';
 import { NextRequest, NextResponse } from 'next/server';
 import { createSession } from '@/lib/auth';
 import { authenticatorDB, userDB } from '@/lib/db';
-import { clearRegisterState, getRegisterState } from '@/lib/webauthn-state';
+import { consumeRegisterState } from '@/lib/webauthn-state';
 import { getRelyingPartyOrigin } from '@/lib/webauthn-rp';
 
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    const state = await getRegisterState();
+    const state = await consumeRegisterState();
     if (!state) {
       return NextResponse.json({ error: 'Registration session expired' }, { status: 400 });
     }
@@ -28,13 +28,13 @@ export async function POST(request: NextRequest) {
       expectedRPID: rpID,
     });
 
-    if (!verification.verified || !verification.registrationInfo || !state.userId) {
+    if (!verification.verified || !verification.registrationInfo) {
       return NextResponse.json({ error: 'Registration verification failed' }, { status: 400 });
     }
 
-    const user = userDB.getById(state.userId);
+    const user = state.userId ? userDB.getById(state.userId) : userDB.getByUsername(state.username) ?? userDB.create(state.username);
     if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Registration failed' }, { status: 400 });
     }
 
     if (authenticatorDB.listByUserId(user.id).length > 0) {
@@ -43,15 +43,15 @@ export async function POST(request: NextRequest) {
 
     const { credential } = verification.registrationInfo;
     const credentialId = credential.id;
-    if (!authenticatorDB.getByCredentialId(credentialId)) {
-      authenticatorDB.create(user.id, credentialId, Buffer.from(credential.publicKey), credential.counter ?? 0);
+    if (authenticatorDB.getByCredentialId(credentialId)) {
+      return NextResponse.json({ error: 'Credential already registered' }, { status: 409 });
     }
+    authenticatorDB.create(user.id, credentialId, Buffer.from(credential.publicKey), credential.counter ?? 0);
 
     await createSession({ userId: user.id, username: user.username });
-    await clearRegisterState();
-
     return NextResponse.json({ verified: true, user: { id: user.id, username: user.username } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Registration verification failed' }, { status: 400 });
+    console.error('Registration verification failed', error);
+    return NextResponse.json({ error: 'Registration verification failed' }, { status: 400 });
   }
 }
