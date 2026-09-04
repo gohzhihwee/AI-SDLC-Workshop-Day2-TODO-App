@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { useNotifications } from '@/lib/hooks/useNotifications';
 import type { Priority, RecurrencePattern, ReminderMinutes, Tag, Template, Todo } from '@/lib/db';
+import { calculateProgress } from '@/lib/subtasks';
 import {
   formatReminderLabel,
   formatSingaporeDate,
@@ -164,10 +165,8 @@ async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T
 }
 
 function getProgress(todo: Todo) {
-  const total = todo.subtasks?.length ?? 0;
-  const completed = (todo.subtasks ?? []).filter((subtask) => subtask.completed).length;
-  const percentage = total === 0 ? 0 : Math.round((completed / total) * 100);
-  return { total, completed, percentage };
+  const { completed, total, percent } = calculateProgress(todo.subtasks ?? []);
+  return { total, completed, percentage: percent };
 }
 
 function formatDueDate(value: string | null) {
@@ -875,6 +874,12 @@ export default function HomePage() {
               data-testid={`subtask-input-${todo.id}`}
               value={subtaskInputs[todo.id] ?? ''}
               onChange={(event) => setSubtaskInputs((current) => ({ ...current, [todo.id]: event.target.value }))}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void handleAddSubtask(todo.id);
+                }
+              }}
               placeholder="Add subtask"
               className="flex-1 rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
             />
