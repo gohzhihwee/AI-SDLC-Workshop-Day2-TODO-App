@@ -353,6 +353,10 @@ function normalizeTodoInput(input: CreateTodoInput | UpdateTodoInput, enforceFut
     throw new Error('Invalid recurrence pattern');
   }
 
+  if (isRecurring && !recurrencePattern) {
+    throw new Error('Invalid recurrence pattern');
+  }
+
   const reminderMinutes = input.reminder_minutes ?? null;
   if (reminderMinutes !== null && !validReminders.includes(reminderMinutes)) {
     throw new Error('Invalid reminder value');
