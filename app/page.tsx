@@ -4,33 +4,19 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 import { useNotifications } from '@/lib/hooks/useNotifications';
+import { useDebounce } from '@/lib/hooks/useDebounce';
 import type { Priority, RecurrencePattern, ReminderMinutes, Tag, Template, Todo } from '@/lib/db';
 import { calculateProgress } from '@/lib/subtasks';
+import { applyFilters, DEFAULT_FILTER_STATE, hasActiveFilters, type FilterState } from '@/lib/filters';
+import { deletePreset, loadPresets, savePreset, type FilterPreset } from '@/lib/presets';
 import {
   formatReminderLabel,
-  formatSingaporeDate,
   formatSingaporeDateTime,
   formatSingaporeDateTimeLocal,
   getSingaporeNow,
   parseDateTimeLocal,
   parseSingaporeDate,
 } from '@/lib/timezone';
-
-type FilterState = {
-  search: string;
-  priority: Priority | 'all';
-  tagId: number | 'all';
-  completion: 'all' | 'active' | 'completed';
-  dueDateFrom: string;
-  dueDateTo: string;
-};
-
-type FilterPreset = {
-  id: string;
-  name: string;
-  filters: FilterState;
-  createdAt: string;
-};
 
 type TodoFormState = {
   title: string;
@@ -62,14 +48,6 @@ type TemplatesResponse = { templates: Template[] };
 type TodoSubtask = NonNullable<Todo['subtasks']>[number];
 
 const reminderOptions: ReminderMinutes[] = [15, 30, 60, 120, 1440, 2880, 10080];
-const defaultFilters: FilterState = {
-  search: '',
-  priority: 'all',
-  tagId: 'all',
-  completion: 'all',
-  dueDateFrom: '',
-  dueDateTo: '',
-};
 const defaultForm: TodoFormState = {
   title: '',
   dueDate: '',
@@ -109,51 +87,6 @@ function sortTodos(items: Todo[]): Todo[] {
   });
 }
 
-function applyFilters(items: Todo[], filters: FilterState): Todo[] {
-  let result = [...items];
-
-  if (filters.search.trim()) {
-    const query = filters.search.trim().toLowerCase();
-    result = result.filter((todo) => {
-      const subtaskMatch = (todo.subtasks ?? []).some((subtask) => subtask.title.toLowerCase().includes(query));
-      return todo.title.toLowerCase().includes(query) || subtaskMatch;
-    });
-  }
-
-  if (filters.priority !== 'all') {
-    result = result.filter((todo) => todo.priority === filters.priority);
-  }
-
-  if (filters.tagId !== 'all') {
-    result = result.filter((todo) => (todo.tags ?? []).some((tag) => tag.id === filters.tagId));
-  }
-
-  if (filters.completion !== 'all') {
-    result = result.filter((todo) => (filters.completion === 'completed' ? todo.completed : !todo.completed));
-  }
-
-  if (filters.dueDateFrom || filters.dueDateTo) {
-    result = result.filter((todo) => {
-      if (!todo.due_date) {
-        return false;
-      }
-
-      const date = formatSingaporeDate(todo.due_date);
-      if (filters.dueDateFrom && date < filters.dueDateFrom) {
-        return false;
-      }
-
-      if (filters.dueDateTo && date > filters.dueDateTo) {
-        return false;
-      }
-
-      return true;
-    });
-  }
-
-  return result;
-}
-
 async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   const data = (await response.json()) as T & { error?: string };
@@ -183,10 +116,12 @@ export default function HomePage() {
   const [error, setError] = useState('');
   const [banner, setBanner] = useState('');
   const [todoForm, setTodoForm] = useState<TodoFormState>(defaultForm);
-  const [searchDraft, setSearchDraft] = useState('');
-  const [filters, setFilters] = useState<FilterState>(defaultFilters);
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTER_STATE);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [presets, setPresets] = useState<FilterPreset[]>([]);
   const [presetName, setPresetName] = useState('');
+  const [presetModalOpen, setPresetModalOpen] = useState(false);
+  const [presetError, setPresetError] = useState('');
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -227,33 +162,19 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem('todo-app:filter-presets');
-    if (saved) {
-      try {
-        // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrating from localStorage on mount
-        setPresets(JSON.parse(saved) as FilterPreset[]);
-      } catch {
-        window.localStorage.removeItem('todo-app:filter-presets');
-      }
-    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrating from localStorage on mount
+    setPresets(loadPresets());
   }, []);
 
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      setFilters((current) => ({ ...current, search: searchDraft }));
-    }, 300);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [searchDraft]);
+  const debouncedSearch = useDebounce(filters.search, 300);
+  const debouncedFilters = useMemo(() => ({ ...filters, search: debouncedSearch }), [filters, debouncedSearch]);
 
   const { permission, requestPermission } = useNotifications(Boolean(user), (items) => {
     const titles = items.map((item) => item.title).join(', ');
     setBanner(`Reminder: ${titles}`);
   });
 
-  const filteredTodos = useMemo(() => applyFilters(todos, filters), [todos, filters]);
+  const filteredTodos = useMemo(() => applyFilters(todos, debouncedFilters), [todos, debouncedFilters]);
   const now = getSingaporeNow();
   const overdueTodos = useMemo(
     () => sortTodos(filteredTodos.filter((todo) => !todo.completed && todo.due_date && parseSingaporeDate(todo.due_date).getTime() < now.getTime())),
@@ -636,18 +557,41 @@ export default function HomePage() {
       return;
     }
 
-    const nextPresets = [
-      {
+    setPresetError('');
+    try {
+      const nextPresets = savePreset({
         id: crypto.randomUUID(),
         name,
         filters,
         createdAt: formatSingaporeDateTime(getSingaporeNow()),
-      },
-      ...presets,
-    ];
-    setPresets(nextPresets);
-    setPresetName('');
-    window.localStorage.setItem('todo-app:filter-presets', JSON.stringify(nextPresets));
+      });
+      setPresets(nextPresets);
+      setPresetName('');
+      setPresetModalOpen(false);
+    } catch (saveError) {
+      setPresetError(saveError instanceof Error ? saveError.message : 'Could not save preset');
+    }
+  };
+
+  const handleDeletePreset = (id: string) => {
+    setPresets(deletePreset(id));
+  };
+
+  const handleApplyPreset = (preset: FilterPreset) => {
+    // Fall back any dimension referencing a tag that no longer exists rather
+    // than silently applying a filter that matches nothing.
+    const tagStillExists = preset.filters.tagId === 'all' || tags.some((tag) => tag.id === preset.filters.tagId);
+    setFilters({
+      ...preset.filters,
+      tagId: tagStillExists ? preset.filters.tagId : 'all',
+    });
+    if (!tagStillExists) {
+      setBanner(`Preset "${preset.name}" referenced a deleted tag; tag filter reset to All tags.`);
+    }
+  };
+
+  const handleClearFilters = () => {
+    setFilters(DEFAULT_FILTER_STATE);
   };
 
   const renderTodoCard = (todo: Todo) => {
@@ -1144,13 +1088,27 @@ export default function HomePage() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <input
-                  data-testid="search-input"
-                  value={searchDraft}
-                  onChange={(event) => setSearchDraft(event.target.value)}
-                  placeholder="Search todos or subtasks"
-                  className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
-                />
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">🔍</span>
+                  <input
+                    data-testid="search-input"
+                    value={filters.search}
+                    onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))}
+                    placeholder="Search todos and subtasks..."
+                    className="w-full rounded-xl border border-slate-300 bg-transparent px-9 py-2 dark:border-slate-700"
+                  />
+                  {filters.search ? (
+                    <button
+                      type="button"
+                      data-testid="clear-search"
+                      aria-label="Clear search"
+                      onClick={() => setFilters((current) => ({ ...current, search: '' }))}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  ) : null}
+                </div>
                 <select
                   data-testid="filter-priority"
                   value={filters.priority}
@@ -1162,108 +1120,186 @@ export default function HomePage() {
                   <option value="medium">Medium</option>
                   <option value="low">Low</option>
                 </select>
-                <select
-                  data-testid="filter-tag"
-                  value={filters.tagId}
-                  onChange={(event) =>
-                    setFilters((current) => ({
-                      ...current,
-                      tagId: event.target.value === 'all' ? 'all' : Number(event.target.value),
-                    }))
-                  }
-                  className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
-                >
-                  <option value="all">All tags</option>
-                  {tags.map((tag) => (
-                    <option key={tag.id} value={tag.id}>
-                      {tag.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  data-testid="filter-completion"
-                  value={filters.completion}
-                  onChange={(event) => setFilters((current) => ({ ...current, completion: event.target.value as FilterState['completion'] }))}
-                  className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
-                >
-                  <option value="all">All statuses</option>
-                  <option value="active">Active</option>
-                  <option value="completed">Completed</option>
-                </select>
-                <input
-                  data-testid="filter-date-from"
-                  type="date"
-                  value={filters.dueDateFrom}
-                  onChange={(event) => setFilters((current) => ({ ...current, dueDateFrom: event.target.value }))}
-                  className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
-                />
-                <input
-                  data-testid="filter-date-to"
-                  type="date"
-                  value={filters.dueDateTo}
-                  onChange={(event) => setFilters((current) => ({ ...current, dueDateTo: event.target.value }))}
-                  className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
-                />
+                {tags.length ? (
+                  <select
+                    data-testid="filter-tag"
+                    value={tags.some((tag) => tag.id === filters.tagId) ? filters.tagId : 'all'}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        tagId: event.target.value === 'all' ? 'all' : Number(event.target.value),
+                      }))
+                    }
+                    className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
+                  >
+                    <option value="all">All tags</option>
+                    {tags.map((tag) => (
+                      <option key={tag.id} value={tag.id}>
+                        {tag.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
               </div>
 
-              <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center">
-                <input
-                  value={presetName}
-                  onChange={(event) => setPresetName(event.target.value)}
-                  placeholder="Preset name"
-                  className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
-                />
-                <button type="button" onClick={handleSavePreset} className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700">
-                  Save preset
-                </button>
-                <select
-                  data-testid="preset-select"
-                  defaultValue=""
-                  onChange={(event) => {
-                    const preset = presets.find((item) => item.id === event.target.value);
-                    if (preset) {
-                      setFilters(preset.filters);
-                      setSearchDraft(preset.filters.search);
-                    }
-                  }}
-                  className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
-                >
-                  <option value="">Load preset</option>
-                  {presets.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.name}
-                    </option>
-                  ))}
-                </select>
+              <div className="mt-4 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    setFilters(defaultFilters);
-                    setSearchDraft('');
-                  }}
-                  className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700"
+                  data-testid="advanced-toggle"
+                  onClick={() => setAdvancedOpen((current) => !current)}
+                  className={`rounded-xl px-3 py-2 text-sm font-medium ${advancedOpen ? 'bg-blue-600 text-white' : 'border border-slate-300 dark:border-slate-700'}`}
                 >
-                  Reset filters
+                  {advancedOpen ? '▼ Advanced' : '▶ Advanced'}
                 </button>
+                {hasActiveFilters(filters) ? (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="clear-all-filters"
+                      onClick={handleClearFilters}
+                      className="text-sm font-medium text-red-600"
+                    >
+                      Clear All
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="open-save-filter"
+                      onClick={() => setPresetModalOpen(true)}
+                      className="text-sm font-medium text-green-600"
+                    >
+                      💾 Save Filter
+                    </button>
+                  </>
+                ) : null}
               </div>
+
+              {advancedOpen ? (
+                <div data-testid="advanced-panel" className="mt-4 grid gap-4 md:grid-cols-3">
+                  <select
+                    data-testid="filter-completion"
+                    value={filters.completion}
+                    onChange={(event) => setFilters((current) => ({ ...current, completion: event.target.value as FilterState['completion'] }))}
+                    className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
+                  >
+                    <option value="all">All todos</option>
+                    <option value="incomplete">Incomplete Only</option>
+                    <option value="completed">Completed Only</option>
+                  </select>
+                  <input
+                    data-testid="filter-date-from"
+                    type="date"
+                    value={filters.dueDateFrom ?? ''}
+                    onChange={(event) => setFilters((current) => ({ ...current, dueDateFrom: event.target.value || null }))}
+                    className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
+                  />
+                  <input
+                    data-testid="filter-date-to"
+                    type="date"
+                    value={filters.dueDateTo ?? ''}
+                    onChange={(event) => setFilters((current) => ({ ...current, dueDateTo: event.target.value || null }))}
+                    className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
+                  />
+                  {filters.dueDateFrom && filters.dueDateTo && filters.dueDateFrom > filters.dueDateTo ? (
+                    <p className="text-xs text-amber-600 md:col-span-3">From date is after To date — no todos can match.</p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {presets.length ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {presets.map((preset) => (
+                    <span key={preset.id} data-testid={`preset-pill-${preset.id}`} className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-sm dark:border-slate-700">
+                      <button type="button" onClick={() => handleApplyPreset(preset)} className="font-medium">
+                        {preset.name}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePreset(preset.id)}
+                        aria-label={`Delete preset ${preset.name}`}
+                        className="text-slate-400 hover:text-red-500"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </section>
           </div>
 
           <div className="space-y-6">
             <section data-testid="overdue-section" className="rounded-3xl bg-white p-6 shadow-sm dark:bg-slate-900">
-              <h2 className="mb-4 text-xl font-semibold text-red-600 dark:text-red-400">Overdue ({overdueTodos.length})</h2>
-              <div className="space-y-4">{overdueTodos.length ? overdueTodos.map(renderTodoCard) : <p className="text-sm text-slate-500 dark:text-slate-400">No overdue todos.</p>}</div>
+              {overdueTodos.length ? (
+                <>
+                  <h2 className="mb-4 text-xl font-semibold text-red-600 dark:text-red-400">Overdue ({overdueTodos.length})</h2>
+                  <div className="space-y-4">{overdueTodos.map(renderTodoCard)}</div>
+                </>
+              ) : null}
             </section>
             <section data-testid="pending-section" className="rounded-3xl bg-white p-6 shadow-sm dark:bg-slate-900">
-              <h2 className="mb-4 text-xl font-semibold">Pending ({pendingTodos.length})</h2>
-              <div className="space-y-4">{pendingTodos.length ? pendingTodos.map(renderTodoCard) : <p className="text-sm text-slate-500 dark:text-slate-400">No pending todos.</p>}</div>
+              {pendingTodos.length ? (
+                <>
+                  <h2 className="mb-4 text-xl font-semibold">Pending ({pendingTodos.length})</h2>
+                  <div className="space-y-4">{pendingTodos.map(renderTodoCard)}</div>
+                </>
+              ) : null}
             </section>
             <section data-testid="completed-section" className="rounded-3xl bg-white p-6 shadow-sm dark:bg-slate-900">
-              <h2 className="mb-4 text-xl font-semibold">Completed ({completedTodos.length})</h2>
-              <div className="space-y-4">{completedTodos.length ? completedTodos.map(renderTodoCard) : <p className="text-sm text-slate-500 dark:text-slate-400">No completed todos.</p>}</div>
+              {completedTodos.length ? (
+                <>
+                  <h2 className="mb-4 text-xl font-semibold">Completed ({completedTodos.length})</h2>
+                  <div className="space-y-4">{completedTodos.map(renderTodoCard)}</div>
+                </>
+              ) : null}
             </section>
+            {!overdueTodos.length && !pendingTodos.length && !completedTodos.length ? (
+              <section className="rounded-3xl bg-white p-6 text-center shadow-sm dark:bg-slate-900">
+                {todos.length === 0 ? (
+                  <p data-testid="empty-no-todos" className="text-sm text-slate-500 dark:text-slate-400">You have no todos yet.</p>
+                ) : (
+                  <p data-testid="empty-no-matches" className="text-sm text-slate-500 dark:text-slate-400">No todos match your filters.</p>
+                )}
+              </section>
+            ) : null}
           </div>
         </section>
+
+        {presetModalOpen ? (
+          <div data-testid="save-filter-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4">
+            <div className="w-full max-w-lg rounded-3xl bg-white p-6 dark:bg-slate-900">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-xl font-semibold">Save Filter</h2>
+                <button type="button" onClick={() => setPresetModalOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <p data-testid="save-filter-preview" className="mb-4 text-sm text-slate-600 dark:text-slate-300">
+                {[
+                  filters.search.trim() ? `Search: "${filters.search.trim()}"` : null,
+                  filters.priority !== 'all' ? `Priority: ${filters.priority}` : null,
+                  filters.tagId !== 'all' ? `Tag: ${tags.find((tag) => tag.id === filters.tagId)?.name ?? filters.tagId}` : null,
+                  filters.completion !== 'all' ? `Completion: ${filters.completion}` : null,
+                  filters.dueDateFrom || filters.dueDateTo ? `Date: ${filters.dueDateFrom ?? '…'} to ${filters.dueDateTo ?? '…'}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || 'No active filters'}
+              </p>
+              {presetError ? <p className="mb-3 text-sm text-red-600">{presetError}</p> : null}
+              <div className="flex gap-3">
+                <input
+                  data-testid="preset-name-input"
+                  value={presetName}
+                  onChange={(event) => setPresetName(event.target.value)}
+                  placeholder="Preset name"
+                  className="flex-1 rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
+                />
+                <button type="button" data-testid="confirm-save-preset" onClick={handleSavePreset} className="rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white">
+                  Save
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {tagModalOpen ? (
           <div data-testid="tags-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4">
