@@ -1,0 +1,20 @@
+import { NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth';
+import { todoDB } from '@/lib/db';
+
+export const runtime = 'nodejs';
+
+export async function GET() {
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  }
+
+  const notifications = todoDB.listNotificationCandidates(session.userId);
+  todoDB.markNotificationsSent(
+    session.userId,
+    notifications.map((todo) => todo.id),
+  );
+
+  return NextResponse.json({ notifications });
+}

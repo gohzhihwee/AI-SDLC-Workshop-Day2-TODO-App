@@ -1,0 +1,16 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+*.log
+todos.db
+todos.db-*
+.env
+.env.*
+.DS_Store
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+AI-SDLC-Workshop-Day1n2-low-token-usage/
