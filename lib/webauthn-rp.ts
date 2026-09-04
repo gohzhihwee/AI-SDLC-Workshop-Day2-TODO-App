@@ -1,14 +1,21 @@
 import type { NextRequest } from 'next/server';
 
-/**
- * Derives the WebAuthn relying party origin/ID from the browser's actual
- * `Origin` header. `request.nextUrl` normalizes `127.0.0.1` to `localhost`,
- * which breaks WebAuthn's origin/rpID matching when a client navigates via
- * an IP address (e.g. Playwright's `127.0.0.1:3000` base URL).
- */
 export function getRelyingPartyOrigin(request: NextRequest): { origin: string; rpID: string } {
+  const configuredOrigin = process.env.RP_ORIGIN;
+  const configuredRpId = process.env.RP_ID;
+  if (configuredOrigin && configuredRpId) {
+    return { origin: configuredOrigin, rpID: configuredRpId };
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('RP_ORIGIN and RP_ID are required in production');
+  }
+
   const originHeader = request.headers.get('origin');
   const origin = originHeader ?? request.nextUrl.origin;
-  const rpID = new URL(origin).hostname;
+  const hostname = new URL(origin).hostname;
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+    throw new Error('Unsupported WebAuthn origin');
+  }
+  const rpID = hostname;
   return { origin, rpID };
 }

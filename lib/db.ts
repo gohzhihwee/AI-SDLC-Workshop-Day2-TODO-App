@@ -176,6 +176,15 @@ CREATE TABLE IF NOT EXISTS authenticators (
 );
 CREATE INDEX IF NOT EXISTS idx_authenticators_user_id ON authenticators(user_id);
 
+CREATE TABLE IF NOT EXISTS webauthn_challenges (
+  challenge TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  user_id INTEGER,
+  username TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS todos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -453,6 +462,22 @@ export const userDB = {
   },
 };
 
+export const webauthnChallengeDB = {
+  create(challenge: string, kind: 'register' | 'login', userId: number | undefined, username: string, expiresAt: number): void {
+    db.prepare(
+      'INSERT INTO webauthn_challenges (challenge, kind, user_id, username, expires_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(challenge, kind, userId ?? null, username, expiresAt);
+  },
+  consume(challenge: string, kind: 'register' | 'login'): boolean {
+    const result = db
+      .prepare(
+        'UPDATE webauthn_challenges SET used_at = ? WHERE challenge = ? AND kind = ? AND used_at IS NULL AND expires_at >= ?',
+      )
+      .run(Date.now(), challenge, kind, Date.now());
+    return result.changes === 1;
+  },
+};
+
 export const authenticatorDB = {
   listByUserId(userId: number): Authenticator[] {
     return db
@@ -472,6 +497,12 @@ export const authenticatorDB = {
   },
   updateCounter(id: number, counter: number): void {
     db.prepare('UPDATE authenticators SET counter = ? WHERE id = ?').run(counter, id);
+  },
+  updateCounterIfAdvances(id: number, previousCounter: number, counter: number): boolean {
+    const result = db
+      .prepare('UPDATE authenticators SET counter = ? WHERE id = ? AND counter = ?')
+      .run(counter, id, previousCounter);
+    return result.changes === 1;
   },
 };
 

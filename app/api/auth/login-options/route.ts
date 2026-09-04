@@ -42,6 +42,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(options);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to create login options' }, { status: 400 });
+    console.error('Unable to create login options', error);
+    return NextResponse.json({ error: 'Unable to create login options' }, { status: 500 });
   }
 }
