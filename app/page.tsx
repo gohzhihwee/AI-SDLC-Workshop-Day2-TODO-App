@@ -34,6 +34,16 @@ type TemplateDraft = {
   category: string;
 };
 
+type TemplateSource = {
+  title: string;
+  priority: Priority;
+  isRecurring: boolean;
+  recurrencePattern: RecurrencePattern;
+  reminderMinutes: '' | ReminderMinutes;
+  dueDate: string;
+  subtasks: Array<{ title: string; position?: number }>;
+};
+
 type UserResponse = {
   user: {
     userId: number;
@@ -124,6 +134,9 @@ export default function HomePage() {
   const [presetError, setPresetError] = useState('');
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [saveTemplateModalOpen, setSaveTemplateModalOpen] = useState(false);
+  const [templateSourceTodo, setTemplateSourceTodo] = useState<Todo | null>(null);
+  const [templateCategoryFilter, setTemplateCategoryFilter] = useState('all');
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#3B82F6');
   const [editingTagId, setEditingTagId] = useState<number | null>(null);
@@ -132,6 +145,8 @@ export default function HomePage() {
   const [editingTodoId, setEditingTodoId] = useState<number | null>(null);
   const [editingTodoDraft, setEditingTodoDraft] = useState<TodoFormState>(defaultForm);
   const [subtaskInputs, setSubtaskInputs] = useState<Record<number, string>>({});
+  const [draftSubtasks, setDraftSubtasks] = useState<Array<{ title: string; position: number }>>([]);
+  const [draftSubtaskInput, setDraftSubtaskInput] = useState('');
   const [templateDraft, setTemplateDraft] = useState<TemplateDraft>({ name: '', description: '', category: '' });
 
   const loadApp = async () => {
@@ -228,6 +243,8 @@ export default function HomePage() {
 
     setTodos((current) => [tempTodo, ...current]);
     setTodoForm(defaultForm);
+    setDraftSubtasks([]);
+    setDraftSubtaskInput('');
 
     try {
       const data = await requestJson<TodoResponse>('/api/todos', {
@@ -452,60 +469,72 @@ export default function HomePage() {
     setTodos((current) => current.map((todo) => (todo.id === todoId ? data.todo : todo)));
   };
 
-  const buildTemplatePayload = (title: string, subtasks: Todo['subtasks']) => ({
-    name: templateDraft.name.trim() || `${title} template`,
+  const buildTemplatePayload = (source: TemplateSource) => ({
+    name: templateDraft.name.trim(),
     description: templateDraft.description.trim() || null,
     category: templateDraft.category.trim() || null,
-    title_template: title,
-    priority: todoForm.priority,
-    is_recurring: todoForm.isRecurring,
-    recurrence_pattern: todoForm.isRecurring ? todoForm.recurrencePattern : null,
-    reminder_minutes: todoForm.reminderMinutes || null,
-    due_date_offset_minutes: todoForm.dueDate
-      ? Math.max(1, Math.round((parseSingaporeDate(parseDateTimeLocal(todoForm.dueDate)).getTime() - getSingaporeNow().getTime()) / 60000))
+    title_template: source.title,
+    priority: source.priority,
+    is_recurring: source.isRecurring,
+    recurrence_pattern: source.isRecurring ? source.recurrencePattern : null,
+    reminder_minutes: source.reminderMinutes || null,
+    due_date_offset_minutes: source.dueDate
+      ? Math.round((parseSingaporeDate(parseDateTimeLocal(source.dueDate)).getTime() - getSingaporeNow().getTime()) / 60000)
       : null,
-    subtasks_json: JSON.stringify((subtasks ?? []).map((subtask, index) => ({ title: subtask.title, position: subtask.position ?? index }))),
+    subtasks_json: JSON.stringify((source.subtasks ?? []).map((subtask, index) => ({ title: subtask.title, position: subtask.position ?? index }))),
   });
 
-  const handleSaveDraftTemplate = async () => {
+  const handleSaveTemplate = async () => {
+    const source: TemplateSource = templateSourceTodo
+      ? {
+          title: templateSourceTodo.title,
+          priority: templateSourceTodo.priority,
+          isRecurring: templateSourceTodo.is_recurring,
+          recurrencePattern: templateSourceTodo.recurrence_pattern ?? 'daily',
+          reminderMinutes: templateSourceTodo.reminder_minutes === null ? '' : (templateSourceTodo.reminder_minutes as ReminderMinutes),
+          dueDate: templateSourceTodo.due_date ? formatSingaporeDateTimeLocal(templateSourceTodo.due_date) : '',
+          subtasks: templateSourceTodo.subtasks ?? [],
+        }
+      : {
+          title: todoForm.title.trim(),
+          priority: todoForm.priority,
+          isRecurring: todoForm.isRecurring,
+          recurrencePattern: todoForm.recurrencePattern,
+          reminderMinutes: todoForm.reminderMinutes,
+          dueDate: todoForm.dueDate,
+          subtasks: draftSubtasks,
+        };
+    if (!source.title || !templateDraft.name.trim()) {
+      setError('Template name and title are required');
+      return;
+    }
+
     try {
       const data = await requestJson<{ template: Template }>('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildTemplatePayload(todoForm.title.trim() || 'Untitled Todo', [])),
+        body: JSON.stringify(buildTemplatePayload(source)),
       });
       setTemplates((current) => [data.template, ...current]);
       setBanner('Template saved');
+      setSaveTemplateModalOpen(false);
+      setTemplateSourceTodo(null);
+      setTemplateDraft({ name: '', description: '', category: '' });
     } catch (templateError) {
       setError(templateError instanceof Error ? templateError.message : 'Unable to create template');
     }
   };
 
-  const handleSaveTodoTemplate = async (todo: Todo) => {
-    try {
-      const data = await requestJson<{ template: Template }>('/api/templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: `${todo.title} template`,
-          description: null,
-          category: null,
-          title_template: todo.title,
-          priority: todo.priority,
-          is_recurring: todo.is_recurring,
-          recurrence_pattern: todo.recurrence_pattern,
-          reminder_minutes: todo.reminder_minutes,
-          due_date_offset_minutes: todo.due_date
-            ? Math.max(1, Math.round((parseSingaporeDate(todo.due_date).getTime() - getSingaporeNow().getTime()) / 60000))
-            : null,
-          subtasks_json: JSON.stringify((todo.subtasks ?? []).map((subtask) => ({ title: subtask.title, position: subtask.position }))),
-        }),
-      });
-      setTemplates((current) => [data.template, ...current]);
-      setBanner('Template saved from todo');
-    } catch (templateError) {
-      setError(templateError instanceof Error ? templateError.message : 'Unable to save template');
-    }
+  const handleSaveDraftTemplate = () => {
+    setTemplateSourceTodo(null);
+    setTemplateDraft((current) => ({ ...current, name: current.name || `${todoForm.title.trim()} template` }));
+    setSaveTemplateModalOpen(true);
+  };
+
+  const handleSaveTodoTemplate = (todo: Todo) => {
+    setTemplateSourceTodo(todo);
+    setTemplateDraft((current) => ({ ...current, name: current.name || `${todo.title} template` }));
+    setSaveTemplateModalOpen(true);
   };
 
   const handleUseTemplate = async (templateId: number) => {
@@ -515,17 +544,30 @@ export default function HomePage() {
       });
       setTodos((current) => [data.todo, ...current]);
       setBanner('Template used');
+      setTemplateModalOpen(false);
     } catch (templateError) {
       setError(templateError instanceof Error ? templateError.message : 'Unable to use template');
     }
   };
 
   const handleDeleteTemplate = async (templateId: number) => {
+    if (!window.confirm('Delete this template?')) {
+      return;
+    }
+
     try {
       await requestJson(`/api/templates/${templateId}`, { method: 'DELETE' });
       setTemplates((current) => current.filter((template) => template.id !== templateId));
     } catch (templateError) {
       setError(templateError instanceof Error ? templateError.message : 'Unable to delete template');
+    }
+  };
+
+  const handleQuickUseTemplate = (event: ChangeEvent<HTMLSelectElement>) => {
+    const templateId = Number(event.target.value);
+    event.target.value = '';
+    if (templateId) {
+      void handleUseTemplate(templateId);
     }
   };
 
@@ -913,8 +955,8 @@ export default function HomePage() {
             <section className="rounded-3xl bg-white p-6 shadow-sm dark:bg-slate-900">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-xl font-semibold">Create Todo</h2>
-                <button type="button" onClick={() => void handleSaveDraftTemplate()} className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700">
-                  Save draft as template
+                <button type="button" onClick={handleSaveDraftTemplate} className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700">
+                  Save as Template
                 </button>
               </div>
 
@@ -1058,10 +1100,54 @@ export default function HomePage() {
                     className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
                   />
                 </div>
+                <div className="space-y-2">
+                  <span className="text-sm font-medium">Template subtasks</span>
+                  {draftSubtasks.map((subtask) => (
+                    <div key={subtask.position} className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 text-sm dark:bg-slate-950/40">
+                      <span>{subtask.title}</span>
+                      <button
+                        type="button"
+                        onClick={() => setDraftSubtasks((current) => current.filter((item) => item.position !== subtask.position))}
+                        className="text-red-600"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex gap-2">
+                    <input
+                      data-testid="draft-subtask-input"
+                      value={draftSubtaskInput}
+                      onChange={(event) => setDraftSubtaskInput(event.target.value)}
+                      placeholder="Add a template subtask"
+                      className="flex-1 rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const title = draftSubtaskInput.trim();
+                        if (!title) return;
+                        setDraftSubtasks((current) => [...current, { title, position: current.length }]);
+                        setDraftSubtaskInput('');
+                      }}
+                      className="rounded-xl border border-slate-300 px-3 py-2 text-sm dark:border-slate-700"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
 
                 <button data-testid="create-todo-button" type="submit" className="rounded-2xl bg-blue-600 px-5 py-3 font-semibold text-white">
                   Create Todo
                 </button>
+                <select data-testid="use-template-select" defaultValue="" onChange={handleQuickUseTemplate} className="rounded-2xl border border-slate-300 px-3 py-3 dark:border-slate-700">
+                  <option value="">Use Template</option>
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}{template.category ? ` (${template.category})` : ''}
+                    </option>
+                  ))}
+                </select>
               </form>
             </section>
 
@@ -1368,23 +1454,33 @@ export default function HomePage() {
             <div className="w-full max-w-3xl rounded-3xl bg-white p-6 dark:bg-slate-900">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-xl font-semibold">Templates</h2>
-                <button type="button" onClick={() => setTemplateModalOpen(false)}>
-                  Close
-                </button>
+                <div className="flex items-center gap-3">
+                  <select data-testid="template-category-filter" defaultValue="all" onChange={(event) => setTemplateCategoryFilter(event.target.value)} className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-slate-700">
+                    <option value="all">All categories</option>
+                    {[...new Set(templates.map((template) => template.category).filter((category): category is string => Boolean(category)))].sort().map((category) => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => setTemplateModalOpen(false)}>Close</button>
+                </div>
               </div>
 
               <div className="space-y-3">
-                {templates.length ? (
-                  templates.map((template) => (
+                {templates.filter((template) => templateCategoryFilter === 'all' || template.category === templateCategoryFilter).length ? (
+                  templates.filter((template) => templateCategoryFilter === 'all' || template.category === templateCategoryFilter).map((template) => (
                     <div key={template.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-4 dark:border-slate-800 md:flex-row md:items-center md:justify-between">
                       <div>
-                        <h3 className="font-semibold">{template.name}</h3>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-semibold">{template.name}</h3>
+                          {template.category ? <span className="rounded-full bg-slate-200 px-2 py-1 text-xs font-semibold dark:bg-slate-800">{template.category}</span> : null}
+                        </div>
+                        {template.description ? <p className="text-sm text-slate-600 dark:text-slate-300">{template.description}</p> : null}
                         <p className="text-sm text-slate-600 dark:text-slate-300">{template.title_template}</p>
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {template.priority}
-                          {template.is_recurring && template.recurrence_pattern ? ` · ${template.recurrence_pattern}` : ''}
-                          {template.reminder_minutes ? ` · reminder ${formatReminderLabel(template.reminder_minutes)}` : ''}
-                        </p>
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                          <span className={`rounded-full px-2 py-1 font-semibold ${priorityBadgeClass[template.priority]}`}>{template.priority}</span>
+                          {template.is_recurring && template.recurrence_pattern ? <span className="rounded-full bg-purple-100 px-2 py-1 font-semibold text-purple-700 dark:bg-purple-950/40 dark:text-purple-300">🔄 {template.recurrence_pattern}</span> : null}
+                          {template.reminder_minutes ? <span className="rounded-full bg-emerald-100 px-2 py-1 font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">🔔 {formatReminderLabel(template.reminder_minutes)}</span> : null}
+                        </div>
                       </div>
                       <div className="flex gap-2">
                         <button data-testid={`use-template-${template.id}`} type="button" onClick={() => void handleUseTemplate(template.id)} className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white">
@@ -1400,6 +1496,22 @@ export default function HomePage() {
                   <p className="text-sm text-slate-500 dark:text-slate-400">No templates yet.</p>
                 )}
               </div>
+            </div>
+          </div>
+        ) : null}
+        {saveTemplateModalOpen ? (
+          <div data-testid="save-template-modal" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 px-4">
+            <div className="w-full max-w-lg space-y-4 rounded-3xl bg-white p-6 dark:bg-slate-900">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">Save as Template</h2>
+                <button type="button" onClick={() => setSaveTemplateModalOpen(false)}>Close</button>
+              </div>
+              <input data-testid="template-name-input" value={templateDraft.name} onChange={(event) => setTemplateDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Template name" className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700" />
+              <textarea data-testid="template-description-input" value={templateDraft.description} onChange={(event) => setTemplateDraft((current) => ({ ...current, description: event.target.value }))} placeholder="Description (optional)" className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700" />
+              <input data-testid="template-category-input" value={templateDraft.category} onChange={(event) => setTemplateDraft((current) => ({ ...current, category: event.target.value }))} placeholder="Category (optional)" className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700" />
+              <button data-testid="save-template-button" type="button" disabled={!templateDraft.name.trim()} onClick={() => void handleSaveTemplate()} className="rounded-xl bg-blue-600 px-4 py-2 font-semibold text-white disabled:opacity-50">
+                Save Template
+              </button>
             </div>
           </div>
         ) : null}

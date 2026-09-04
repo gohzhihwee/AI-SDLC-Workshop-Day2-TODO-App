@@ -276,6 +276,44 @@ function mapSubtask(row: SubtaskRow): Subtask {
   };
 }
 
+function mapTemplate(row: Template): Template {
+  return { ...row, is_recurring: Boolean(row.is_recurring) };
+}
+
+function validateDueDateOffset(value: number | null | undefined): number | null | undefined {
+  if (value !== null && value !== undefined && !Number.isInteger(value)) {
+    throw new Error('Due date offset must be an integer');
+  }
+  return value;
+}
+
+function validateSubtasksJson(value: string | null | undefined): string | null | undefined {
+    if (value === null || value === undefined) {
+      return value;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      throw new Error('Template subtasks must be valid JSON');
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some(
+        (subtask) =>
+          typeof subtask !== 'object' ||
+          subtask === null ||
+          typeof (subtask as { title?: unknown }).title !== 'string' ||
+          (subtask as { title: string }).title.trim().length === 0 ||
+          !Number.isInteger((subtask as { position?: unknown }).position),
+      )
+    ) {
+      throw new Error('Template subtasks must be an array of titled items');
+    return value;
+  }
+  return value;
+}
+
 function placeholders(ids: number[]): string {
   return ids.map(() => '?').join(', ');
 }
@@ -774,10 +812,11 @@ export const tagDB = {
 
 export const templateDB = {
   listByUserId(userId: number): Template[] {
-    return db.prepare('SELECT * FROM templates WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(userId) as Template[];
+    return (db.prepare('SELECT * FROM templates WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(userId) as Template[]).map(mapTemplate);
   },
   getById(userId: number, id: number): Template | null {
-    return (db.prepare('SELECT * FROM templates WHERE id = ? AND user_id = ?').get(id, userId) as Template | undefined) ?? null;
+    const row = db.prepare('SELECT * FROM templates WHERE id = ? AND user_id = ?').get(id, userId) as Template | undefined;
+    return row ? mapTemplate(row) : null;
   },
   create(userId: number, input: CreateTemplateInput): Template {
     const name = input.name.trim();
@@ -791,6 +830,11 @@ export const templateDB = {
     if (input.recurrence_pattern && !validPatterns.includes(input.recurrence_pattern)) {
       throw new Error('Invalid recurrence pattern');
     }
+    if (input.is_recurring && input.due_date_offset_minutes == null) {
+      throw new Error('Recurring templates require a due date offset');
+    }
+    const dueDateOffset = validateDueDateOffset(input.due_date_offset_minutes);
+    const subtasksJson = validateSubtasksJson(input.subtasks_json);
     if (input.reminder_minutes !== undefined && input.reminder_minutes !== null && !validReminders.includes(input.reminder_minutes)) {
       throw new Error('Invalid reminder value');
     }
@@ -814,8 +858,8 @@ export const templateDB = {
         input.is_recurring ? 1 : 0,
         input.recurrence_pattern ?? null,
         input.reminder_minutes ?? null,
-        input.due_date_offset_minutes ?? null,
-        input.subtasks_json ?? null,
+        dueDateOffset ?? null,
+        subtasksJson ?? null,
       );
     return this.getById(userId, Number(result.lastInsertRowid)) as Template;
   },
@@ -838,6 +882,23 @@ export const templateDB = {
         input.due_date_offset_minutes === undefined ? existing.due_date_offset_minutes : input.due_date_offset_minutes,
       subtasks_json: input.subtasks_json === undefined ? existing.subtasks_json : input.subtasks_json,
     };
+    const name = merged.name.trim();
+    const titleTemplate = merged.title_template.trim();
+    if (!name || !titleTemplate) {
+      throw new Error('Template name and title are required');
+    }
+    const priority = validatePriority(merged.priority);
+    if (merged.recurrence_pattern && !validPatterns.includes(merged.recurrence_pattern)) {
+      throw new Error('Invalid recurrence pattern');
+    }
+    if (merged.is_recurring && merged.due_date_offset_minutes == null) {
+      throw new Error('Recurring templates require a due date offset');
+    }
+    const dueDateOffset = validateDueDateOffset(merged.due_date_offset_minutes);
+    const subtasksJson = validateSubtasksJson(merged.subtasks_json);
+    if (merged.reminder_minutes !== null && merged.reminder_minutes !== undefined && !validReminders.includes(merged.reminder_minutes)) {
+      throw new Error('Invalid reminder value');
+    }
     if (merged.reminder_minutes !== null && merged.reminder_minutes !== undefined && merged.due_date_offset_minutes == null) {
       throw new Error('Reminders require a due date offset');
     }
@@ -848,16 +909,16 @@ export const templateDB = {
            recurrence_pattern = ?, reminder_minutes = ?, due_date_offset_minutes = ?, subtasks_json = ?
        WHERE id = ? AND user_id = ?`,
     ).run(
-      merged.name.trim(),
+      name,
       merged.description ?? null,
       merged.category ?? null,
-      merged.title_template.trim(),
-      merged.priority,
+      titleTemplate,
+      priority,
       merged.is_recurring ? 1 : 0,
       merged.recurrence_pattern ?? null,
       merged.reminder_minutes ?? null,
-      merged.due_date_offset_minutes ?? null,
-      merged.subtasks_json ?? null,
+      dueDateOffset ?? null,
+      subtasksJson ?? null,
       id,
       userId,
     );
@@ -874,7 +935,24 @@ export const templateDB = {
       return null;
     }
 
-    const parsedSubtasks = template.subtasks_json ? (JSON.parse(template.subtasks_json) as TemplateSubtaskInput[]) : [];
+    let parsedSubtasks: TemplateSubtaskInput[] = [];
+    if (template.subtasks_json) {
+      try {
+        const parsed = JSON.parse(template.subtasks_json) as unknown;
+        parsedSubtasks = Array.isArray(parsed)
+          ? parsed.filter(
+              (subtask): subtask is TemplateSubtaskInput =>
+                typeof subtask === 'object' &&
+                subtask !== null &&
+                typeof (subtask as { title?: unknown }).title === 'string' &&
+                (subtask as { title: string }).title.trim().length > 0 &&
+                Number.isInteger((subtask as { position?: unknown }).position),
+            )
+          : [];
+      } catch (error) {
+        throw new Error(error instanceof Error ? error.message : 'Template subtasks are invalid');
+      }
+    }
     const now = getSingaporeNow();
     const dueDate =
       template.due_date_offset_minutes === null ? null : formatSingaporeDateTime(addSingaporeMinutes(now, template.due_date_offset_minutes));
