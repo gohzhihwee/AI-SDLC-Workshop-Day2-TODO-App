@@ -11,10 +11,6 @@ export async function GET() {
   }
 
   const notifications = todoDB.listNotificationCandidates(session.userId);
-  todoDB.markNotificationsSent(
-    session.userId,
-    notifications.map((todo) => todo.id),
-  );
 
   return NextResponse.json({ notifications });
 }

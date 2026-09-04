@@ -13,7 +13,15 @@ const importTodoSchema = z.object({
   priority: z.enum(['high', 'medium', 'low']),
   is_recurring: z.boolean(),
   recurrence_pattern: z.enum(['daily', 'weekly', 'monthly', 'yearly']).nullable(),
-  reminder_minutes: z.number().nullable(),
+  reminder_minutes: z.union([
+    z.literal(15),
+    z.literal(30),
+    z.literal(60),
+    z.literal(120),
+    z.literal(1440),
+    z.literal(2880),
+    z.literal(10080),
+  ]).nullable(),
   last_notification_sent: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string().nullable(),
@@ -31,6 +39,8 @@ const importTodoSchema = z.object({
       color: z.string().min(1),
     }),
   ),
+}).refine((todo) => todo.reminder_minutes === null || todo.due_date !== null, {
+  message: 'Reminders require a due date',
 });
 
 const importSchema = z.object({

@@ -7,6 +7,15 @@ export type RecurrencePattern = 'daily' | 'weekly' | 'monthly' | 'yearly';
 export type ReminderMinutes = 15 | 30 | 60 | 120 | 1440 | 2880 | 10080;
 
 export const PRIORITY_VALUES: Priority[] = ['high', 'medium', 'low'];
+export const REMINDER_LABELS: Record<ReminderMinutes, string> = {
+  15: '15m',
+  30: '30m',
+  60: '1h',
+  120: '2h',
+  1440: '1d',
+  2880: '2d',
+  10080: '1w',
+};
 
 export const PRIORITY_ORDER: Record<Priority, number> = {
   high: 0,
@@ -234,6 +243,14 @@ CREATE TABLE IF NOT EXISTS holidays (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_holidays_date ON holidays(date);
 `);
 
+const todoColumns = db.prepare('PRAGMA table_info(todos)').all() as Array<{ name: string }>;
+if (!todoColumns.some((column) => column.name === 'reminder_minutes')) {
+  db.exec('ALTER TABLE todos ADD COLUMN reminder_minutes INTEGER');
+}
+if (!todoColumns.some((column) => column.name === 'last_notification_sent')) {
+  db.exec('ALTER TABLE todos ADD COLUMN last_notification_sent TEXT');
+}
+
 type TodoRow = Omit<Todo, 'completed' | 'is_recurring' | 'subtasks' | 'tags'> & {
   completed: number;
   is_recurring: number;
@@ -304,6 +321,9 @@ function normalizeTodoInput(input: CreateTodoInput | UpdateTodoInput, enforceFut
   }
 
   const dueDate = input.due_date ?? null;
+  if (reminderMinutes !== null && !dueDate) {
+    throw new Error('Reminders require a due date');
+  }
   if (dueDate) {
     const parsedDueDate = parseSingaporeDate(dueDate);
     if (Number.isNaN(parsedDueDate.getTime())) {
@@ -488,6 +508,12 @@ export const todoDB = {
       },
       input.due_date !== undefined,
     );
+    const reminderChanged =
+      input.reminder_minutes !== undefined && input.reminder_minutes !== existing.reminder_minutes;
+    const dueDateChanged = input.due_date !== undefined && input.due_date !== existing.due_date;
+    if (reminderChanged || dueDateChanged) {
+      normalized.last_notification_sent = null;
+    }
 
     db.prepare(
       `UPDATE todos
@@ -765,6 +791,12 @@ export const templateDB = {
     if (input.recurrence_pattern && !validPatterns.includes(input.recurrence_pattern)) {
       throw new Error('Invalid recurrence pattern');
     }
+    if (input.reminder_minutes !== undefined && input.reminder_minutes !== null && !validReminders.includes(input.reminder_minutes)) {
+      throw new Error('Invalid reminder value');
+    }
+    if (input.reminder_minutes !== null && input.reminder_minutes !== undefined && input.due_date_offset_minutes == null) {
+      throw new Error('Reminders require a due date offset');
+    }
 
     const result = db
       .prepare(
@@ -806,6 +838,9 @@ export const templateDB = {
         input.due_date_offset_minutes === undefined ? existing.due_date_offset_minutes : input.due_date_offset_minutes,
       subtasks_json: input.subtasks_json === undefined ? existing.subtasks_json : input.subtasks_json,
     };
+    if (merged.reminder_minutes !== null && merged.reminder_minutes !== undefined && merged.due_date_offset_minutes == null) {
+      throw new Error('Reminders require a due date offset');
+    }
 
     db.prepare(
       `UPDATE templates

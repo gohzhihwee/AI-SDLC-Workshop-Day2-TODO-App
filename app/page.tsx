@@ -248,7 +248,7 @@ export default function HomePage() {
     };
   }, [searchDraft]);
 
-  useNotifications(Boolean(user), (items) => {
+  const { permission, requestPermission } = useNotifications(Boolean(user), (items) => {
     const titles = items.map((item) => item.title).join(', ');
     setBanner(`Reminder: ${titles}`);
   });
@@ -673,7 +673,13 @@ export default function HomePage() {
                     data-testid={`edit-todo-due-date-${todo.id}`}
                     type="datetime-local"
                     value={editingTodoDraft.dueDate}
-                    onChange={(event) => setEditingTodoDraft((current) => ({ ...current, dueDate: event.target.value }))}
+                    onChange={(event) =>
+                      setEditingTodoDraft((current) => ({
+                        ...current,
+                        dueDate: event.target.value,
+                        reminderMinutes: event.target.value ? current.reminderMinutes : '',
+                      }))
+                    }
                     className="rounded-xl border border-slate-300 bg-transparent px-3 py-2 dark:border-slate-700"
                   />
                   <select
@@ -929,6 +935,19 @@ export default function HomePage() {
               <Link href="/calendar" className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold dark:border-slate-700">
                 Calendar
               </Link>
+              <button
+                data-testid="enable-notifications-button"
+                type="button"
+                onClick={() => void requestPermission()}
+                disabled={permission === 'granted'}
+                className={
+                  permission === 'granted'
+                    ? 'rounded-xl bg-green-100 px-4 py-2 text-sm font-semibold text-green-800 dark:bg-green-900 dark:text-green-200'
+                    : 'rounded-xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600'
+                }
+              >
+                {permission === 'granted' ? '🔔 Notifications On' : '🔔 Enable Notifications'}
+              </button>
               <button data-testid="open-tags-modal" type="button" onClick={() => setTagModalOpen(true)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold dark:border-slate-700">
                 Manage Tags
               </button>
