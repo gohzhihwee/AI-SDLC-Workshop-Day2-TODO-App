@@ -4,6 +4,10 @@ import { templateDB } from '@/lib/db';
 
 export const runtime = 'nodejs';
 
+type TemplateRequest = Parameters<typeof templateDB.create>[1] & {
+  subtasks?: Array<{ title: string; position: number }>;
+};
+
 export async function GET() {
   const session = await getSession();
   if (!session) {
@@ -20,7 +24,13 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const template = templateDB.create(session.userId, (await request.json()) as Parameters<typeof templateDB.create>[1]);
+    const body = (await request.json()) as TemplateRequest;
+    const template = templateDB.create(session.userId, {
+      ...body,
+      subtasks_json:
+        body.subtasks_json ??
+        (body.subtasks ? JSON.stringify(body.subtasks.map((subtask, index) => ({ title: subtask.title, position: subtask.position ?? index }))) : null),
+    });
     return NextResponse.json({ template }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to create template' }, { status: 400 });
